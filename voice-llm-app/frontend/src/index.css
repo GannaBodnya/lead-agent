@@ -25,6 +25,13 @@
   overflow: hidden;
 }
 
+/* Single-column when avatar is disabled */
+.main-layout--no-avatar {
+  max-width: 48rem;
+  width: 100%;
+  margin: 0 auto;
+}
+
 /* ── Avatar panel ── */
 .avatar-panel {
   width: 340px;

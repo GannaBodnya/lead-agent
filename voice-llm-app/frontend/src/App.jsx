@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import {
   Header,
   HeaderName,
@@ -12,7 +12,7 @@ import {
   ToastNotification,
 } from '@carbon/react'
 import { Microphone, MicrophoneOff, Send, VolumeMuteFilled } from '@carbon/icons-react'
-import { useSpeechToText } from './useSpeech'
+import { useSpeechToText, useTextToSpeech } from './useSpeech'
 import { sendMessageStream } from './api'
 import Avatar from './Avatar'
 
@@ -23,11 +23,21 @@ export default function App() {
   const [inputText, setInputText] = useState('')
   const [loading, setLoading] = useState(false)
   const [sttError, setSttError] = useState(null)
+  const [avatarEnabled, setAvatarEnabled] = useState(false)  // set after feature check
   const [avatarSpeaking, setAvatarSpeaking] = useState(false)
   const streamingContentRef = useRef('')
   const messagesEndRef = useRef(null)
   const avatarRef = useRef(null)
 
+  // ── Check server feature flags on mount ──────────────────────────────────
+  useEffect(() => {
+    fetch('/api/features')
+      .then((r) => r.json())
+      .then((f) => setAvatarEnabled(!!f.avatar))
+      .catch(() => setAvatarEnabled(false))
+  }, [])
+
+  // ── STT ───────────────────────────────────────────────────────────────────
   const handleSpeechResult = useCallback((transcript) => {
     setInputText(transcript)
   }, [])
@@ -39,29 +49,41 @@ export default function App() {
     error: recognitionError,
   } = useSpeechToText({ onResult: handleSpeechResult })
 
+  // ── Fallback browser TTS (used when avatar is disabled) ───────────────────
+  const { speak: browserSpeak, cancel: browserCancel, speaking: browserSpeaking } = useTextToSpeech()
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }
 
+  // ── Speak response — avatar if available, browser TTS otherwise ───────────
   const speakResponse = useCallback((text) => {
-    if (avatarRef.current) {
+    if (avatarEnabled && avatarRef.current) {
       setAvatarSpeaking(true)
       avatarRef.current.speak(text)
-      // Poll until avatar finishes speaking
       const poll = setInterval(() => {
         if (!avatarRef.current?.isSpeaking()) {
           setAvatarSpeaking(false)
           clearInterval(poll)
         }
       }, 500)
+    } else {
+      browserSpeak(text)
     }
-  }, [])
+  }, [avatarEnabled, browserSpeak])
 
   const stopSpeaking = useCallback(() => {
-    avatarRef.current?.stop()
-    setAvatarSpeaking(false)
-  }, [])
+    if (avatarEnabled) {
+      avatarRef.current?.stop()
+      setAvatarSpeaking(false)
+    } else {
+      browserCancel()
+    }
+  }, [avatarEnabled, browserCancel])
 
+  const isSpeaking = avatarEnabled ? avatarSpeaking : browserSpeaking
+
+  // ── Send message ──────────────────────────────────────────────────────────
   const sendMessage = useCallback(async (text) => {
     const trimmed = text.trim()
     if (!trimmed || loading) return
@@ -128,11 +150,10 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      {/* ── Top navigation bar ── */}
       <Header aria-label="Voice LLM Chat">
         <HeaderName prefix="IBM">Voice Agent</HeaderName>
         <HeaderGlobalBar>
-          {avatarSpeaking && (
+          {isSpeaking && (
             <HeaderGlobalAction
               aria-label="Stop speaking"
               onClick={stopSpeaking}
@@ -145,7 +166,6 @@ export default function App() {
       </Header>
 
       <Content className="chat-content">
-        {/* ── Error toast ── */}
         {error && (
           <ToastNotification
             kind="warning"
@@ -157,13 +177,15 @@ export default function App() {
           />
         )}
 
-        <div className="main-layout">
-          {/* ── Avatar panel ── */}
-          <div className="avatar-panel">
-            <Avatar ref={avatarRef} />
-          </div>
+        {/* avatarEnabled controls whether the two-column layout is shown */}
+        <div className={avatarEnabled ? 'main-layout' : 'main-layout main-layout--no-avatar'}>
 
-          {/* ── Chat panel ── */}
+          {avatarEnabled && (
+            <div className="avatar-panel">
+              <Avatar ref={avatarRef} />
+            </div>
+          )}
+
           <div className="chat-panel">
             <div className="messages-container">
               {messages.length === 0 && (
@@ -194,7 +216,6 @@ export default function App() {
               <div ref={messagesEndRef} />
             </div>
 
-            {/* ── Input bar ── */}
             <div className="input-bar">
               <Button
                 kind={listening ? 'danger' : 'ghost'}
@@ -220,10 +241,7 @@ export default function App() {
               />
 
               {loading ? (
-                <InlineLoading
-                  description="Thinking…"
-                  className="loading-indicator"
-                />
+                <InlineLoading description="Thinking…" className="loading-indicator" />
               ) : (
                 <Button
                   kind="primary"

@@ -39,8 +39,9 @@ async def lifespan(app: FastAPI):
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(title="Voice LLM API", version="0.1.0", lifespan=lifespan)
 
-# OpenAI client for TTS — key loaded from environment
-_openai = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
+# OpenAI client for TTS — only active when OPENAI_API_KEY is set
+_openai_api_key = os.environ.get("OPENAI_API_KEY", "")
+_openai = AsyncOpenAI(api_key=_openai_api_key) if _openai_api_key else None
 
 # CORS: only allow requests from the local Vite dev server
 app.add_middleware(
@@ -69,6 +70,12 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/api/features")
+async def features():
+    """Advertise which optional features are available based on server config."""
+    return {"avatar": bool(_openai_api_key)}
+
+
 @app.post("/api/tts")
 async def tts(request: Request):
     """
@@ -77,6 +84,9 @@ async def tts(request: Request):
     We forward to OpenAI TTS and stream the audio back.
     API key never leaves the server.
     """
+    if not _openai:
+        raise HTTPException(status_code=503, detail="TTS not configured — set OPENAI_API_KEY")
+
     body = await request.json()
     text = body.get("input", "")
     if not text:
